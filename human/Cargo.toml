@@ -1,0 +1,35 @@
+[package]
+name = "human-program"
+version = "0.1.0"
+edition = "2021"
+description = "main human program"
+license-file = "../LICENSE"
+
+[features]
+no-entrypoint = []
+test-bpf = []
+dev = []
+
+[dependencies]
+human-common = { path = "../common", version = "0.1.0" }
+human-round = { path = "../round", version = "0.1.0",  features = ["no-entrypoint"] }
+human-fanout = { path = "../fanout", version = "0.1.0", features = ["no-entrypoint"] }
+solana-program = "1.10.25"
+borsh = "0.9.1"
+spl-token = {version = "3.3.0", features = ["no-entrypoint"]}
+spl-token-swap = {version = "2.1.0", features = ["no-entrypoint"]}
+spl-associated-token-account = {version = "1.0.3", features = ["no-entrypoint"]}
+spl-math = {version = "0.1", features = ["no-entrypoint"]}
+thiserror = "1.0"
+shank = "0.0.2"
+mpl-token-metadata = { version = "1.3.3", features = ["no-entrypoint"]}
+anchor-lang = {version = "0.27.0", features = ["init-if-needed"]}
+
+[dev-dependencies]
+solana-program-test = "1.9.6"
+solana-sdk = "1.9.6"
+rand = "0.8"
+proptest = "1.0.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]

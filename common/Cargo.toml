@@ -1,0 +1,19 @@
+[package]
+name = "human-common"
+version = "0.1.0"
+edition = "2021"
+description = "common routines for writing contracts without Anchor"
+license-file = "../LICENSE"
+
+[dependencies]
+solana-program = "1.9.6"
+borsh = "0.9.1"
+spl-token = {version = "3.3.0", features = ["no-entrypoint"]}
+spl-associated-token-account = {version = "1.0.3", features = ["no-entrypoint"]}
+
+[dev-dependencies]
+solana-program-test = "1.9.6"
+solana-sdk = "1.9.6"
+
+[lib]
+crate-type = ["lib"]

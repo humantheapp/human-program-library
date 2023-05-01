@@ -1,0 +1,8 @@
+[workspace]
+members = ["human", "escrow", "royalty", "common", "round", "fanout"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+overflow-checks = true
+panic = "abort"

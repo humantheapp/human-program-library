@@ -1,0 +1,3 @@
+[submodule "checked-math"]
+	path = checked-math
+	url = https://github.com/blockworks-foundation/checked-math

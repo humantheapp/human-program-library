@@ -1,0 +1,80 @@
+variables:
+  # https://docs.gitlab.com/ee/ci/docker/using_docker_build.html
+  DOCKER_TLS_CERTDIR: "/certs"
+
+stages:
+  - build
+  - publish
+
+# hopefully this improves speed
+.rust-cache:
+  cache:
+    - key: bpf-cache
+      paths:
+        - $HOME/.cache/solana/
+        - /bin/sdk/bpf
+    - key:
+        files:
+          - Cargo.toml
+      paths:
+        - target/
+
+build-contracts:
+  stage: build
+  image: "$CI_REGISTRY_IMAGE/rust-solana:latest"
+  extends: .rust-cache
+  artifacts:
+    paths:
+      - ./*.so
+  script:
+    - rustc --version && cargo --version
+    - cargo test-bpf --workspace
+    - rustup component add clippy
+    - cargo clippy --no-deps
+    - cargo build-bpf --bpf-out-dir .
+
+build-swap:
+  stage: build
+  image: "$CI_REGISTRY_IMAGE/rust-solana"
+  extends: .rust-cache
+  artifacts:
+    paths:
+      - spl_token_swap.so
+      - spl_governance.so
+  variables:
+    TAG: governance-v2.2.4
+    # archive checksum
+    CHECKSUM: 0ebd8fd2eb5074c622a7fad2ec4fe8f0d81530bb925ea185f1f4d1cabc5bf008
+  script:
+    - curl -fsSL https://github.com/solana-labs/solana-program-library/archive/refs/tags/$TAG.tar.gz > source.tar.gz
+    - echo "$CHECKSUM  source.tar.gz" | sha256sum -c -
+    - tar -xzf source.tar.gz
+    - cd solana-program-library-* && cargo build-bpf --bpf-out-dir ..
+
+push-ci-images:
+  stage: publish
+  image: docker:stable
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_DEPLOY_USER -p $CI_DEPLOY_PASSWORD $CI_REGISTRY
+  script:
+    - ls -R || exit 0
+    - ls *.so && mkdir ./ci/test-validator/bin/ && cp *.so ./ci/test-validator/bin/ && cp ./ci/test-validator/spl_governance.so ./ci/test-validator/bin/
+    - env
+    - docker build -t $CI_REGISTRY_IMAGE/test-validator:latest ./ci/test-validator
+    - docker login -u $CI_DEPLOY_USER -p $CI_DEPLOY_PASSWORD $CI_REGISTRY
+    - docker push $CI_REGISTRY_IMAGE/test-validator:latest
+  dependencies:
+    - build-contracts
+    - build-swap
+
+deploy-devnet-images:
+  stage: publish
+  when: manual
+  image: "$CI_REGISTRY_IMAGE/rust-solana:latest"
+  script:
+    - echo "TODO Deploying on devnet"
+  dependencies:
+    - build-contracts
+    - build-swap
