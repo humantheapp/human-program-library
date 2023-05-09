@@ -804,7 +804,7 @@ fn process_register_post(
 
         // change to v3 when mainnet finally rolls out
         let create_collection_metadata =
-            mpl_token_metadata::instruction::create_metadata_accounts_v2(
+            mpl_token_metadata::instruction::create_metadata_accounts_v3(
                 mpl_token_metadata::ID,
                 collection_metadata_pda,
                 collection_mint,
@@ -819,6 +819,7 @@ fn process_register_post(
                 true,
                 true,
                 None, // not a member of collection, but a collection itself
+                None,
                 None,
             );
         invoke_signed(&create_collection_metadata, accounts, &[authority_seeds])?;
@@ -847,7 +848,7 @@ fn process_register_post(
     )?;
 
     // create metadata
-    let create_metadata = mpl_token_metadata::instruction::create_metadata_accounts_v2(
+    let create_metadata = mpl_token_metadata::instruction::create_metadata_accounts_v3(
         mpl_token_metadata::ID,
         master_post_metadata_pda,
         master_post_mint,
@@ -863,6 +864,7 @@ fn process_register_post(
         true, // mutable
         None,
         None, // no uses for this nft, lol
+        None,
     );
     invoke_signed(&create_metadata, accounts, &[authority_seeds])?;
 
@@ -1500,7 +1502,7 @@ fn process_claim_round_vesting(
     // check round is saved in state
     if state.current_round != Some(*round_acc.key) {
         msg!("state.current_round != round_acc.key");
-        return Err(ProgramError::InvalidArgument);
+        return Ok(());
     }
 
     // check round was accepted
