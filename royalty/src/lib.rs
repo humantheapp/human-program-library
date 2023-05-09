@@ -184,6 +184,12 @@ fn process_initialize(
     Ok(())
 }
 
+pub(crate) mod round_program {
+    use solana_program::declare_id;
+
+    declare_id!("Round8ieb1Jcbp4m68kwCVyUJmHAVoz4orTwU3LtAuH");
+}
+
 // [write] state
 // [write] state wallet
 // [write] derived voucher
@@ -218,12 +224,21 @@ fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64) -
     let instructions = next_expected_account(account_info_iter, &instructions::ID)?;
     let rent = Rent::get()?;
 
-    check_no_other_programs(instructions, &[program_id, &system_program::ID])?;
+    check_no_other_programs(
+        instructions,
+        &[
+            program_id,
+            &system_program::ID,
+            &spl_associated_token_account::ID,
+            &round_program::ID,
+        ],
+    )?;
 
     // quick hack to avoid migration :p
     state.settings.host_fee = 250;
     state.settings.host_flat_fee = 0;
     state.settings.owner_fee = 0;
+    state.settings.min_token_to_enroll = 0;
 
     if !user.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
@@ -266,6 +281,7 @@ fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64) -
             state: *state_acc.key,
             balance: 0,
             drop_idx: state.drop_idx,
+            last_distribution: 0,
         };
 
         state.vouchers_count = state.vouchers_count.checked_add(1).ok_or(Error::Overflow)?;
@@ -494,6 +510,7 @@ fn check_no_other_programs(acc: &AccountInfo, allowed_programs: &[&Pubkey]) -> P
         let inst = instructions::load_instruction_at_checked(i as usize, acc)?;
 
         if !allowed_programs.iter().any(|id| **id == inst.program_id) {
+            msg!("no other programs allowed");
             return Error::NoOtherProgramsAllowed.into();
         }
     }
@@ -527,7 +544,7 @@ fn process_distribute(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramR
         // 1. check if there is enough balance
         // 2. assure there is least some tokens
         // 3. calculate owner and host fees and deduct them from distribution
-        let minimum_balance = rent.minimum_balance(State::SIZE);
+        let minimum_balance = rent.minimum_balance(State::SIZE).checked_add(1).unwrap();
 
         let excess_balance = state_lamports
             .checked_sub(minimum_balance)

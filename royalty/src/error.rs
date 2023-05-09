@@ -8,7 +8,7 @@ pub enum Error {
     LessThanDepositMinimum,
     #[error("this account is prohibited from enrolling in distribution")]
     BlackistedForEnroll,
-    #[error("no other program calls can be present in enumerate transaction")]
+    #[error("no other program calls can be present in this transaction")]
     NoOtherProgramsAllowed,
     #[error("voucher is not eligible to receive this drop")]
     VoucherNotEligible,

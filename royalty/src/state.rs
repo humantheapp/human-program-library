@@ -1,5 +1,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use solana_program::{program_error::ProgramError, pubkey::Pubkey};
+use solana_program::{
+    clock::{Clock, UnixTimestamp},
+    program_error::ProgramError,
+    pubkey::Pubkey,
+    sysvar::Sysvar,
+};
 use spl_math::precise_number::PreciseNumber;
 
 use crate::error::Error;
@@ -168,6 +173,7 @@ impl Distribution {
             .map_err(|_| Error::Overflow)?;
 
         voucher.drop_idx = voucher.drop_idx.checked_add(1).ok_or(Error::Overflow)?;
+        voucher.last_distribution = Clock::get()?.unix_timestamp;
 
         Ok(lamports)
     }
@@ -181,6 +187,7 @@ pub struct VoucherV2 {
     pub state: Pubkey,
     pub drop_idx: u32,
     pub balance: u64,
+    pub last_distribution: UnixTimestamp,
 }
 
 impl Entity for VoucherV2 {
@@ -236,6 +243,7 @@ mod tests {
             user: Pubkey::new_unique(),
             state: Pubkey::new_unique(),
             balance: 500,
+            last_distribution: 0,
             drop_idx,
         };
 
@@ -250,6 +258,7 @@ mod tests {
             user: Pubkey::new_unique(),
             state: Pubkey::new_unique(),
             balance: 250,
+            last_distribution: 0,
             drop_idx,
         };
 
@@ -269,6 +278,7 @@ mod tests {
             user: Pubkey::new_unique(),
             state: Pubkey::new_unique(),
             balance: 250,
+            last_distribution: 0,
             drop_idx: drop_idx - 1,
         };
         ds.distribute_to(&mut prev_idx_voucher, drop_idx, total_tokens)
@@ -278,6 +288,7 @@ mod tests {
             user: Pubkey::new_unique(),
             state: Pubkey::new_unique(),
             balance: 250,
+            last_distribution: 0,
             drop_idx,
         };
         assert_eq!(
@@ -318,7 +329,7 @@ mod tests {
 
     prop_compose! {
         fn vouchers()(vec in prop::collection::vec(0u64..100000, 1..100)) -> (u64, Vec<Voucher>) {
-            let vouchers = vec.iter().map(|amount| Voucher { user: Pubkey::new_unique(), state: Pubkey::new_unique(), drop_idx: 1, balance: *amount }).collect();
+            let vouchers = vec.iter().map(|amount| Voucher { user: Pubkey::new_unique(), state: Pubkey::new_unique(), last_distribution: 0, drop_idx: 1, balance: *amount }).collect();
             (vec.iter().sum(), vouchers)
         }
     }
