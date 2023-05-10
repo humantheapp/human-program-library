@@ -159,8 +159,8 @@ pub mod round {
 
         refund_bid_to_recipient(&mut ctx)?;
 
-        // will be erased anyways, but to be sure
-        ctx.accounts.voucher.amount_contributed = 0;
+        // will be erased anyways, but just to be sure
+        let contributed = std::mem::take(&mut ctx.accounts.voucher.amount_contributed);
         ctx.accounts.round.vouchers_count = ctx
             .accounts
             .round
@@ -180,7 +180,7 @@ pub mod round {
             user: ctx.accounts.user.key(),
             bid_mint: ctx.accounts.round.bid_mint,
             offer_mint: ctx.accounts.round.offer_mint,
-            amount: ctx.accounts.bid_wallet.amount,
+            amount: contributed,
             reason,
         });
 
