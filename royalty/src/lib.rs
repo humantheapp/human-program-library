@@ -190,6 +190,12 @@ pub(crate) mod round_program {
     declare_id!("Round8ieb1Jcbp4m68kwCVyUJmHAVoz4orTwU3LtAuH");
 }
 
+pub(crate) mod compute_budget_program {
+    use solana_program::declare_id;
+
+    declare_id!("ComputeBudget111111111111111111111111111111");
+}
+
 // [write] state
 // [write] state wallet
 // [write] derived voucher
@@ -231,6 +237,7 @@ fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64) -
             &system_program::ID,
             &spl_associated_token_account::ID,
             &round_program::ID,
+            &compute_budget_program::ID,
         ],
     )?;
 
@@ -533,6 +540,12 @@ fn process_distribute(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramR
     let instructions = next_expected_account(account_info_iter, &instructions::ID)?;
 
     check_no_other_programs(instructions, &[program_id])?;
+
+    // quick hack to avoid migration :p
+    state.settings.host_fee = 250;
+    state.settings.host_flat_fee = 0;
+    state.settings.owner_fee = 0;
+    state.settings.min_token_to_enroll = 0;
 
     let rent = Rent::get()?;
 
