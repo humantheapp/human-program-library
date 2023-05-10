@@ -865,7 +865,7 @@ fn process_decline(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResu
     match state.request {
         Request::Funded(ref r) => {
             let (derived_authority, authority_seed) = authority!(program_id, state_acc.key);
-            //let _authority = next_expected_account(account_info_iter, &derived_authority)?;
+            let _authority = next_expected_account(account_info_iter, &derived_authority)?;
 
             if let COption::Some(rent_balance) = wallet.is_native {
                 let _author = next_expected_account(account_info_iter, &r.author)?;
