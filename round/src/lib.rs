@@ -1038,5 +1038,6 @@ pub struct Close<'info> {
 
 #[derive(Accounts)]
 pub struct Migrate<'info> {
+    #[account(mut)]
     pub round: Box<Account<'info, Round>>,
 }
