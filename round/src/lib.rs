@@ -6,6 +6,8 @@ pub mod error;
 pub mod event;
 pub mod state;
 
+use std::collections::BTreeMap;
+
 use crate::error::RoundError;
 use crate::event::*;
 use crate::state::*;
@@ -157,7 +159,7 @@ pub mod round {
             .round
             .assert_can_withdraw(now, ctx.accounts.user.is_signer)?;
 
-        refund_bid_to_recipient(&mut ctx)?;
+        refund_bid_to_recipient(&mut ctx.accounts, &ctx.bumps)?;
 
         // will be erased anyways, but just to be sure
         let contributed = std::mem::take(&mut ctx.accounts.voucher.amount_contributed);
@@ -229,6 +231,33 @@ pub mod round {
             bid_mint: ctx.accounts.round.bid_mint,
             offer_mint: ctx.accounts.round.offer_mint,
             offer_amount: ctx.accounts.offer_wallet.amount,
+        });
+
+        Ok(())
+    }
+
+    pub fn reject_bid(ctx: Context<RejectBid>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        ctx.accounts.round.assert_can_reject_bid(now)?;
+
+        let mut accounts = ctx.accounts.to_withdraw_ctx();
+        refund_bid_to_recipient(&mut accounts, &ctx.bumps)?;
+
+        // will be erased anyways, but to be sure
+        ctx.accounts.voucher.amount_contributed = 0;
+        ctx.accounts.round.vouchers_count = ctx
+            .accounts
+            .round
+            .vouchers_count
+            .checked_sub(1)
+            .ok_or(error!(RoundError::Overflow))?;
+
+        emit!(BidRejectedEvent {
+            round: ctx.accounts.round.key(),
+            user: ctx.accounts.user.key(),
+            bid_mint: ctx.accounts.round.bid_mint,
+            offer_mint: ctx.accounts.round.offer_mint,
+            amount: ctx.accounts.bid_wallet.amount,
         });
 
         Ok(())
@@ -429,7 +458,7 @@ pub mod round {
     }
 }
 
-fn refund_bid_to_recipient(ctx: &mut Context<Withdraw>) -> Result<()> {
+fn refund_bid_to_recipient(accounts: &mut Withdraw, bumps: &BTreeMap<String, u8>) -> Result<()> {
     let Withdraw {
         round,
         voucher,
@@ -442,13 +471,13 @@ fn refund_bid_to_recipient(ctx: &mut Context<Withdraw>) -> Result<()> {
         current_payer,
         token_program,
         system_program,
-    } = ctx.accounts;
+    } = accounts;
 
     let round_key = round.key();
     let authority_seeds: &[&[&[u8]]] = &[&[
         AUTHORITY_SEED,
         round_key.as_ref(),
-        &[*ctx.bumps.get("authority").unwrap()],
+        &[*bumps.get("authority").unwrap()],
     ]];
 
     if !bid_wallet.is_native() {
@@ -830,6 +859,92 @@ pub struct Withdraw<'info> {
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RejectBid<'info> {
+    #[account(
+        mut,
+        has_one = heir,
+    )]
+    pub round: Box<Account<'info, Round>>,
+
+    #[account(
+        mut,
+        seeds = [VOUCHER_SEED, round.key().as_ref(), user.key().as_ref()],
+        bump,
+        has_one = user,
+        has_one = payer,
+        close = payer,
+    )]
+    pub voucher: Account<'info, Voucher>,
+
+    pub heir: Signer<'info>,
+
+    /// CHECK: no signature required
+    #[account(mut)]
+    pub user: UncheckedAccount<'info>,
+
+    /// CHECK: seeds are checked, we don't care about account being initialized
+    #[account(
+        mut,
+        constraint = user_wallet.key() == get_associated_token_address(
+            user.key,
+            &bid_wallet.mint
+        ),
+    )]
+    pub user_wallet: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [BID_SEED, round.key().as_ref()],
+        bump,
+    )]
+    pub bid_wallet: Account<'info, TokenAccount>,
+
+    /// CHECK: seeds are checked
+    #[account(
+        mut,
+        seeds = [AUTHORITY_SEED, round.key().as_ref()],
+        bump,
+    )]
+    pub authority: UncheckedAccount<'info>,
+
+    /// WSOL mint
+    #[account(constraint = wsol_mint.key() == spl_token::native_mint::ID)]
+    pub wsol_mint: Account<'info, Mint>,
+
+    /// CHECK: We just transfer SOL from closing voucher to this account
+    /// payer should equal to payer field on voucher
+    /// so user can't just steal rent someone else maybe paid
+    #[account(mut)]
+    pub payer: UncheckedAccount<'info>,
+
+    /// current payer should have some SOL to temporarily open WSOL account
+    /// these funds are returned at the end of the call
+    #[account(mut)]
+    pub current_payer: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+impl<'a> RejectBid<'a> {
+    fn to_withdraw_ctx(&self) -> Withdraw<'a> {
+        Withdraw {
+            round: self.round.clone(),
+            voucher: self.voucher.clone(),
+            user: self.user.clone(),
+            user_wallet: self.user_wallet.clone(),
+            bid_wallet: self.bid_wallet.clone(),
+            authority: self.authority.clone(),
+            wsol_mint: self.wsol_mint.clone(),
+            payer: self.payer.clone(),
+            current_payer: self.current_payer.clone(),
+            token_program: self.token_program.clone(),
+            system_program: self.system_program.clone(),
+        }
+    }
 }
 
 #[derive(Accounts)]

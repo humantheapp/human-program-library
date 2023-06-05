@@ -124,6 +124,22 @@ impl Round {
         Ok(())
     }
 
+    pub fn assert_can_reject_bid(&self, now: UnixTimestamp) -> Result<()> {
+        if self.status != RoundStatus::Pending {
+            return err!(RoundError::OfferIsNotPending);
+        }
+
+        if now < self.bidding_end {
+            return err!(RoundError::BiddingStillGoing);
+        }
+
+        if now > self.heir_timeout_date()? {
+            return err!(RoundError::OfferTimedOut);
+        }
+
+        Ok(())
+    }
+
     fn heir_timeout_date(&self) -> Result<UnixTimestamp> {
         self.bidding_end
             .checked_add(WITHDRAWAL_ENABLED_AFTER_INACTIVITY_TIMEOUT)
@@ -357,6 +373,35 @@ mod tests {
         assert_eq!(
             round.assert_can_withdraw(2100 + WITHDRAWAL_ENABLED_AFTER_INACTIVITY_TIMEOUT, false),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn test_can_reject_user_bid() {
+        let mut round = Round {
+            status: RoundStatus::Pending,
+            bidding_start: 1000,
+            bidding_end: 2000,
+            created_at: 500,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            round.assert_can_reject_bid(700),
+            err!(RoundError::BiddingStillGoing)
+        );
+
+        assert_eq!(
+            round.assert_can_reject_bid(1500),
+            err!(RoundError::BiddingStillGoing)
+        );
+
+        assert_eq!(round.assert_can_reject_bid(2001), Ok(()));
+
+        round.status = RoundStatus::Accepted;
+        assert_eq!(
+            round.assert_can_reject_bid(2001),
+            err!(RoundError::OfferIsNotPending)
         );
     }
 

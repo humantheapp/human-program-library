@@ -15,7 +15,7 @@ solana-program = "1.9.6"
 borsh = "0.9.1"
 spl-token = {version = "3.3.0", features = ["no-entrypoint"]}
 spl-associated-token-account = {version = "1.0.3", features = ["no-entrypoint"]}
-thiserror = "1.0.30"
+thiserror = "1.0.40"
 
 [dev-dependencies]
 solana-program-test = "1.9.6"

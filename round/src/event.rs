@@ -27,6 +27,15 @@ pub struct WithdrawEvent {
     pub reason: WithdrawReason,
 }
 
+#[event]
+pub struct BidRejectedEvent {
+    pub round: Pubkey,
+    pub user: Pubkey,
+    pub bid_mint: Pubkey,
+    pub offer_mint: Pubkey,
+    pub amount: u64,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
 pub enum WithdrawReason {
     UserInitiated,
