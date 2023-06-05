@@ -139,6 +139,8 @@ pub fn process_instruction(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    try_fix_state(accounts);
+
     let instruction = Instruction::try_from_slice(instruction_data).map_err(|e| {
         msg!("error parsing instruction: {}", e);
         ProgramError::InvalidInstructionData
@@ -1536,6 +1538,34 @@ fn process_claim_round_vesting(
     state.completed_rounds_count = state.completed_rounds_count.checked_add(1).unwrap();
 
     Ok(())
+}
+
+// lord forgive me for this
+fn try_fix_state(accounts: &[AccountInfo]) {
+    let mut state_data = accounts[0].try_borrow_mut_data().unwrap();
+
+    let drop_option_offset = 210;
+    let mut current_round_offset = 211;
+    if state_data[drop_option_offset] == 1 {
+        current_round_offset += 48;
+    }
+    let completed_rounds_offset = if state_data[current_round_offset] == 1 {
+        current_round_offset + 1 + 32
+    } else {
+        current_round_offset + 1
+    };
+    let completed_rounds_count: u64 = u64::from_le_bytes(
+        state_data[completed_rounds_offset..completed_rounds_offset + 8]
+            .try_into()
+            .unwrap(),
+    );
+
+    let is_broken = state_data[current_round_offset] > 1 || completed_rounds_count > 1000;
+
+    if state_data[0] == ContractState::MAGIC && is_broken {
+        msg!("fixing broken state");
+        state_data[current_round_offset..].fill(0);
+    }
 }
 
 #[cfg(test)]
