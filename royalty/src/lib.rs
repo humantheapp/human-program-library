@@ -668,13 +668,20 @@ fn process_distribute(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramR
     Ok(())
 }
 
+// [] state
 // [write] voucher
 // [signer, writer] user
 fn process_claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let account_info_iter = &mut accounts.iter().peekable();
 
+    let (state, state_acc) = next_entity::<_, State>(account_info_iter, program_id)?;
     let (voucher, voucher_acc) = next_entity::<_, Voucher>(account_info_iter, program_id)?;
     let user = next_signer_account(account_info_iter, &voucher.user)?;
+
+    if voucher.state != *state_acc.key {
+        return Error::InvalidVoucher.into();
+    }
+
     let rent = Rent::get()?;
 
     let rent_minimum = rent.minimum_balance(Voucher::SIZE);
@@ -693,6 +700,9 @@ fn process_claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult
     **user_lamports = user_lamports
         .checked_add(withdraw_amount)
         .ok_or(Error::Overflow)?;
+
+    msg!("event-owner");
+    state.owner.log();
 
     Ok(())
 }
