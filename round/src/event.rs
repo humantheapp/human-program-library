@@ -15,6 +15,7 @@ pub struct ContributeEvent {
     pub bid_mint: Pubkey,
     pub offer_mint: Pubkey,
     pub amount: u64,
+    pub is_offchain: bool,
 }
 
 #[event]

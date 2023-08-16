@@ -3,7 +3,7 @@ use anchor_lang::{prelude::*, solana_program::clock::UnixTimestamp};
 use spl_math::precise_number::PreciseNumber;
 
 #[account]
-#[derive(InitSpace, Default)]
+#[derive(Default)]
 pub struct Round {
     /// current offer status
     pub status: RoundStatus,
@@ -46,14 +46,15 @@ pub struct Round {
     // wallet to return offer when round is rejected/cancelled
     pub return_wallet: Pubkey,
 
+    pub reconciliation_authority: Pubkey,
+
     pub reserved1: [u8; 24],
     pub reserved2: Pubkey,
-    pub reserved3: Pubkey,
 }
 
 const _: [(); Round::INIT_SPACE] = [(); 339];
 
-#[derive(Debug, Clone, PartialEq, AnchorSerialize, AnchorDeserialize, InitSpace)]
+#[derive(Debug, Clone, PartialEq, AnchorSerialize, AnchorDeserialize)]
 pub enum RoundStatus {
     /// Available to deposit and withdraw until bidding has ended
     Pending,
@@ -61,6 +62,8 @@ pub enum RoundStatus {
     Accepted,
     /// Users can withdraw
     Rejected,
+    /// Users are unable to deposit or withdraw, but admin has record regarding fiat contributions
+    Reconciliation,
 }
 
 impl Default for RoundStatus {
@@ -72,6 +75,8 @@ impl Default for RoundStatus {
 const WITHDRAWAL_ENABLED_AFTER_INACTIVITY_TIMEOUT: i64 = 7 * 24 * 60 * 60; // 7 Days
 
 impl Round {
+    pub const INIT_SPACE: usize = 339;
+
     pub fn assert_can_accept_or_reject(&self, now: UnixTimestamp) -> Result<()> {
         if self.status != RoundStatus::Pending {
             return err!(RoundError::OfferIsNotPending);
@@ -101,13 +106,31 @@ impl Round {
         Ok(())
     }
 
+    pub fn assert_can_contribute_offchain(&self) -> Result<()> {
+        if self.status != RoundStatus::Reconciliation {
+            return err!(RoundError::CantContributeFiatNotInReconciliation);
+        }
+        Ok(())
+    }
+
+    pub fn assert_can_finish_reconciliation(&self) -> Result<()> {
+        if self.status != RoundStatus::Reconciliation {
+            return err!(RoundError::CantContributeFiatNotInReconciliation);
+        }
+        Ok(())
+    }
+
     pub fn assert_can_withdraw(&self, now: UnixTimestamp, user_is_signer: bool) -> Result<()> {
         if now < self.bidding_start {
             return err!(RoundError::BiddingNotStarted);
         }
 
-        if self.status == RoundStatus::Accepted {
+        if self.status == RoundStatus::Reconciliation {
             return err!(RoundError::CantWithdrawAcceptedOffer);
+        }
+
+        if self.status == RoundStatus::Accepted {
+            return err!(RoundError::CantWithdrawDuringReconciliation);
         }
 
         if self.status == RoundStatus::Pending
@@ -174,6 +197,7 @@ impl Round {
             RoundStatus::Accepted | RoundStatus::Rejected => Ok(()),
             RoundStatus::Pending if now > self.heir_timeout_date()? => Ok(()),
             RoundStatus::Pending => err!(RoundError::CantCloseBeforeHeirTimeout),
+            RoundStatus::Reconciliation => err!(RoundError::CantCloseDuringReconciliation),
         }
     }
 }
@@ -208,17 +232,22 @@ pub struct Voucher {
     pub payer: Pubkey,
     /// amount user deposited in this offer
     pub amount_contributed: u64,
+    // whether actual money from this contribution was sourced off-chain
+    pub is_fiat: bool,
+    // reserved
+    pub reserved1: [u8; 31],
+    pub reserved2: Pubkey,
+    pub reserved3: Pubkey,
 }
 
 impl Voucher {
     pub fn calculate_space() -> usize {
-        8 + 32 + 32 + 32 + 8
+        8 + 32 + 32 + 32 + 8 + 32 + 32 + 32
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use proptest::prelude::*;
 

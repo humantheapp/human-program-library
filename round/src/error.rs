@@ -38,4 +38,10 @@ pub enum RoundError {
     VouchersNotWithdrawn,
     #[msg("can't close before heir timeout")]
     CantCloseBeforeHeirTimeout,
+    #[msg("can't close round during reconciliation phase")]
+    CantCloseDuringReconciliation,
+    #[msg("can't withdraw during reconciliation phase")]
+    CantWithdrawDuringReconciliation,
+    #[msg("can't contribute fiat not in reconciliation phase")]
+    CantContributeFiatNotInReconciliation,
 }

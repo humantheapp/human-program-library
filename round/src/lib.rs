@@ -26,6 +26,7 @@ pub const AUTHORITY_SEED: &[u8] = b"AUTH";
 pub const OFFER_SEED: &[u8] = b"OFFER";
 pub const BID_SEED: &[u8] = b"BID";
 pub const VOUCHER_SEED: &[u8] = b"VOUCHER";
+pub const OFFCHAIN_VOUCHER_SEED: &[u8] = b"OFFCHAIN_VOUCHER"; // separe voucher namespace so they don't collide
 
 declare_id!("Round8ieb1Jcbp4m68kwCVyUJmHAVoz4orTwU3LtAuH");
 
@@ -130,6 +131,7 @@ pub mod round {
             bid_mint: round.bid_mint,
             offer_mint: round.offer_mint,
             amount: amount_to_deposit,
+            is_offchain: false,
         });
 
         if voucher.payer != Pubkey::default() {
@@ -189,23 +191,96 @@ pub mod round {
         Ok(())
     }
 
-    pub fn accept(mut ctx: Context<Accept>) -> Result<()> {
+    pub fn accept(
+        mut ctx: Context<Accept>,
+        reconciliation_authority: Option<Pubkey>,
+    ) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         ctx.accounts.round.assert_can_accept_or_reject(now)?;
 
-        if ctx.accounts.round.vouchers_count == 0 {
-            return err!(RoundError::CantAcceptZeroOffering);
-        }
+        ctx.accounts.round.total_bid = Some(ctx.accounts.bid_wallet.amount);
+        ctx.accounts.round.total_offer = Some(ctx.accounts.offer_wallet.amount);
 
         transfer_bid_to_recipient(&mut ctx)?;
 
+        if let Some(auth) = reconciliation_authority {
+            msg!("reconciliation authority: {}", auth);
+            ctx.accounts.round.status = RoundStatus::Reconciliation;
+            ctx.accounts.round.reconciliation_authority = auth;
+            return Ok(());
+        }
+
         ctx.accounts.round.status = RoundStatus::Accepted;
-        ctx.accounts.round.total_bid = Some(ctx.accounts.bid_wallet.amount);
-        ctx.accounts.round.total_offer = Some(ctx.accounts.offer_wallet.amount);
 
         emit!(RoundAcceptedEvent {
             round: ctx.accounts.round.key(),
             heir: ctx.accounts.heir.key(),
+            bid_mint: ctx.accounts.round.bid_mint,
+            offer_mint: ctx.accounts.round.offer_mint,
+            bid_amount: ctx.accounts.round.total_bid.unwrap(),
+            offer_amount: ctx.accounts.round.total_offer.unwrap(),
+        });
+
+        Ok(())
+    }
+
+    // Contribute bid mint to round
+    pub fn record_offchain_contribution(
+        ctx: Context<RecordOffchainContribution>,
+        amount_lamports: u64,
+    ) -> Result<()> {
+        ctx.accounts.round.assert_can_contribute_offchain()?;
+
+        let RecordOffchainContribution {
+            round,
+            voucher,
+            user,
+            payer,
+            ..
+        } = ctx.accounts;
+
+        emit!(ContributeEvent {
+            round: round.key(),
+            user: user.key(),
+            bid_mint: round.bid_mint,
+            offer_mint: round.offer_mint,
+            amount: amount_lamports,
+            is_offchain: true,
+        });
+
+        if voucher.payer != Pubkey::default() {
+            msg!("contribute_offchain can be used only once per user");
+            return Ok(());
+        }
+
+        voucher.set_inner(Voucher {
+            user: user.key(),
+            round: round.key(),
+            payer: payer.key(),
+            amount_contributed: amount_lamports,
+            is_fiat: true,
+            reserved1: [0; 31],
+            reserved2: Pubkey::default(),
+            reserved3: Pubkey::default(),
+        });
+
+        // keep track of vouchers
+        round.vouchers_count = round
+            .vouchers_count
+            .checked_add(1)
+            .ok_or(error!(RoundError::Overflow))?;
+
+        Ok(())
+    }
+
+    pub fn finish_reconciliation(ctx: Context<FinishReconciliation>) -> Result<()> {
+        ctx.accounts.round.assert_can_finish_reconciliation()?;
+
+        ctx.accounts.round.status = RoundStatus::Accepted;
+
+        emit!(RoundAcceptedEvent {
+            round: ctx.accounts.round.key(),
+            heir: ctx.accounts.round.heir,
             bid_mint: ctx.accounts.round.bid_mint,
             offer_mint: ctx.accounts.round.offer_mint,
             bid_amount: ctx.accounts.round.total_bid.unwrap(),
@@ -799,6 +874,34 @@ pub struct Contribute<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RecordOffchainContribution<'info> {
+    #[account(
+        mut,
+        has_one = reconciliation_authority,
+    )]
+    pub round: Box<Account<'info, Round>>,
+
+    #[account(
+        init_if_needed,
+        space = Voucher::calculate_space(),
+        payer = payer,
+        seeds = [OFFCHAIN_VOUCHER_SEED, round.key().as_ref(), user.key.as_ref()],
+        bump,
+    )]
+    pub voucher: Account<'info, Voucher>,
+
+    /// CHECK: user is unused
+    pub user: UncheckedAccount<'info>,
+
+    pub reconciliation_authority: Signer<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct Withdraw<'info> {
     #[account(mut)]
     pub round: Box<Account<'info, Round>>,
@@ -1149,6 +1252,17 @@ pub struct Close<'info> {
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FinishReconciliation<'info> {
+    #[account(
+        mut,
+         has_one = reconciliation_authority,
+        )]
+    pub round: Box<Account<'info, Round>>,
+
+    pub reconciliation_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
