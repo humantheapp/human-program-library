@@ -1,5 +1,6 @@
 [workspace]
 members = ["human", "escrow", "royalty", "common", "round", "fanout"]
+resolver = "2"
 
 [profile.release]
 lto = "thin"

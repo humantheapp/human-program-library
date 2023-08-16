@@ -41,7 +41,7 @@ impl Fanout {
     }
 }
 
-#[derive(Default, Debug, Clone, AnchorSerialize, AnchorDeserialize, InitSpace, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, AnchorSerialize, AnchorDeserialize, PartialEq, Eq)]
 pub struct Member {
     pub address: Pubkey,
     pub share: u16,

@@ -18,7 +18,9 @@ use crate::state::{
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use human_common::entity::{initialize_entity, next_entity, Entity};
-use mpl_token_metadata::state::{CollectionDetails, Creator, TokenMetadataAccount};
+use mpl_bubblegum::state::metaplex_adapter::{self, Collection};
+use mpl_token_metadata::state::{CollectionDetails, TokenMetadataAccount};
+use mpl_token_metadata::utils::BUBBLEGUM_SIGNER;
 use solana_program::clock::{Clock, UnixTimestamp};
 use solana_program::program_memory::sol_memset;
 use solana_program::{
@@ -101,7 +103,7 @@ pub struct RegisterPostInstruction {
 
 #[derive(Debug, BorshDeserialize, BorshSerialize)]
 #[repr(C)]
-pub struct RepostInstruction {}
+pub struct RepostArgs {}
 
 #[derive(Debug, BorshDeserialize, BorshSerialize)]
 #[repr(C)]
@@ -127,10 +129,12 @@ pub enum Instruction {
     SetAdmin(SetAdminInstruction),
     DepositCommission,
     RegisterPost(RegisterPostInstruction),
-    Repost(RepostInstruction),
+    Repost(RepostArgs),
     RedeemRepost,
     CreateRound(CreateRoundInstruction),
     ClaimRoundVesting,
+    InitializeTree,
+    RepostCompressed(RepostArgs),
 }
 
 entrypoint!(process_instruction);
@@ -202,6 +206,14 @@ pub fn process_instruction(
         Instruction::ClaimRoundVesting => {
             msg!("claiming round vesting");
             process_claim_round_vesting(program_id, accounts)?;
+        }
+        Instruction::InitializeTree => {
+            msg!("initializing tree");
+            process_initialize_tree(program_id, accounts)?;
+        }
+        Instruction::RepostCompressed(_) => {
+            msg!("repost compressed");
+            process_repost_compressed(program_id, accounts)?;
         }
     }
 
@@ -728,7 +740,11 @@ fn process_register_post(
 
     let payer = next_account_info(account_info_iter)?;
 
-    let post_info = next_account_info(account_info_iter)?;
+    let post_info_acc = next_account_info(account_info_iter)?;
+
+    if post_info_acc.data_len() > 0 {
+        return Ok(());
+    }
 
     let (master_post_mint, master_post_seeds) = master_post_mint!(program_id, &args.post_id);
 
@@ -774,18 +790,18 @@ fn process_register_post(
     }
 
     let creators = vec![
-        Creator {
+        mpl_token_metadata::state::Creator {
             address: args.royalty_addr,
             share: 100, // receives 100% of royalties
             verified: false,
         },
-        Creator {
+        mpl_token_metadata::state::Creator {
             // honoroble mention
             address: state.owner,
             share: 0,
             verified: false,
         },
-        Creator {
+        mpl_token_metadata::state::Creator {
             // for some reason update authority is also required
             address: authority,
             share: 0,
@@ -822,7 +838,7 @@ fn process_register_post(
                 true,
                 None, // not a member of collection, but a collection itself
                 None,
-                None,
+                Some(CollectionDetails::V1 { size: 0 }),
             );
         invoke_signed(&create_collection_metadata, accounts, &[authority_seeds])?;
 
@@ -840,98 +856,103 @@ fn process_register_post(
         invoke_signed(&make_master, accounts, &[authority_seeds])?;
     }
 
-    mint_nft(
-        &master_post_mint,
-        &authority,
-        &authority,
-        payer.key,
-        accounts,
-        &[master_post_seeds.as_ref(), authority_seeds.as_ref()],
-    )?;
+    if args.repost_price > 0 {
+        mint_nft(
+            &master_post_mint,
+            &authority,
+            &authority,
+            payer.key,
+            accounts,
+            &[master_post_seeds.as_ref(), authority_seeds.as_ref()],
+        )?;
 
-    // create metadata
-    let create_metadata = mpl_token_metadata::instruction::create_metadata_accounts_v3(
-        mpl_token_metadata::ID,
-        master_post_metadata_pda,
-        master_post_mint,
-        authority,
-        *payer.key,
-        authority,
-        args.post_name,
-        args.symbol,
-        args.post_metadata_uri,
-        Some(creators),
-        POST_ROYALTY_COMMISSION_BSP,
-        true, // sign with update authority
-        true, // mutable
-        None,
-        None, // no uses for this nft, lol
-        None,
-    );
-    invoke_signed(&create_metadata, accounts, &[authority_seeds])?;
+        // create metadata
+        let create_metadata = mpl_token_metadata::instruction::create_metadata_accounts_v3(
+            mpl_token_metadata::ID,
+            master_post_metadata_pda,
+            master_post_mint,
+            authority,
+            *payer.key,
+            authority,
+            args.post_name.clone(),
+            args.symbol.clone(),
+            args.post_metadata_uri.clone(),
+            Some(creators),
+            POST_ROYALTY_COMMISSION_BSP,
+            true, // sign with update authority
+            true, // mutable
+            None,
+            None, // no uses for this nft, lol
+            None,
+        );
+        invoke_signed(&create_metadata, accounts, &[authority_seeds])?;
 
-    // set as already sold
-    let update_secondary = mpl_token_metadata::instruction::update_metadata_accounts_v2(
-        mpl_token_metadata::ID,
-        master_post_metadata_pda,
-        authority,
-        None,
-        None,
-        Some(true),
-        None,
-    );
-    invoke_signed(&update_secondary, accounts, &[authority_seeds])?;
+        // set as already sold
+        let update_secondary = mpl_token_metadata::instruction::update_metadata_accounts_v2(
+            mpl_token_metadata::ID,
+            master_post_metadata_pda,
+            authority,
+            None,
+            None,
+            Some(true),
+            None,
+        );
+        invoke_signed(&update_secondary, accounts, &[authority_seeds])?;
 
-    // create master edititon
-    let create_master = mpl_token_metadata::instruction::create_master_edition_v3(
-        mpl_token_metadata::ID,
-        master_edition_pda,
-        master_post_mint,
-        authority,
-        authority,
-        master_post_metadata_pda,
-        *payer.key,
-        None, // no printing limit
-    );
-    invoke_signed(&create_master, accounts, &[authority_seeds])?;
+        // create master edititon
+        let create_master = mpl_token_metadata::instruction::create_master_edition_v3(
+            mpl_token_metadata::ID,
+            master_edition_pda,
+            master_post_mint,
+            authority,
+            authority,
+            master_post_metadata_pda,
+            *payer.key,
+            None, // no printing limit
+        );
+        invoke_signed(&create_master, accounts, &[authority_seeds])?;
 
-    // owner is checked inside
-    let collection_meta: mpl_token_metadata::state::Metadata =
-        mpl_token_metadata::state::Metadata::from_account_info(collection_metadata_acc)?;
+        // owner is checked inside
+        let collection_meta: mpl_token_metadata::state::Metadata =
+            mpl_token_metadata::state::Metadata::from_account_info(collection_metadata_acc)?;
 
-    let verify_collection_f =
-        if let Some(CollectionDetails::V1 { .. }) = collection_meta.collection_details {
-            // we have 1.3.3 sized collection
-            mpl_token_metadata::instruction::set_and_verify_sized_collection_item
-        } else {
-            // they still have this on mainnet
-            mpl_token_metadata::instruction::set_and_verify_collection
-        };
+        let verify_collection_f =
+            if let Some(CollectionDetails::V1 { .. }) = collection_meta.collection_details {
+                // we have 1.3.3 sized collection
+                mpl_token_metadata::instruction::set_and_verify_sized_collection_item
+            } else {
+                // they still have this on mainnet
+                mpl_token_metadata::instruction::set_and_verify_collection
+            };
 
-    let verify_collection = verify_collection_f(
-        mpl_token_metadata::ID,
-        master_post_metadata_pda,
-        authority,
-        *payer.key,
-        authority,
-        collection_mint,
-        collection_metadata_pda,
-        collection_edition_pda,
-        None,
-    );
-    invoke_signed(&verify_collection, accounts, &[authority_seeds])?;
+        let verify_collection = verify_collection_f(
+            mpl_token_metadata::ID,
+            master_post_metadata_pda,
+            authority,
+            *payer.key,
+            authority,
+            collection_mint,
+            collection_metadata_pda,
+            collection_edition_pda,
+            None,
+        );
+        invoke_signed(&verify_collection, accounts, &[authority_seeds])?;
+    }
+
+    let post_info = PostInfo {
+        state: *state_acc.key,
+        post_id: args.post_id,
+        created_at: args.created_at,
+        repost_price: Some(args.repost_price),
+        royalty_address: args.royalty_addr,
+        payer: *payer.key,
+        name: args.post_name.clone(),
+        symbol: args.symbol.clone(),
+        uri: args.post_metadata_uri.clone(),
+    };
 
     // record creation date
-    save_post_info(
-        program_id,
-        payer.key,
-        state_acc.key,
-        args.post_id,
-        args.created_at,
-        args.repost_price,
-        post_info,
-        accounts,
-    )?;
+    save_post_info(program_id, payer.key, post_info, post_info_acc, accounts)?;
 
     Ok(())
 }
@@ -939,25 +960,15 @@ fn process_register_post(
 fn save_post_info(
     program_id: &Pubkey,
     payer_addr: &Pubkey,
-    state_acc: &Pubkey,
-    post_id: [u8; 32],
-    created_at: i64,
-    repost_price: u64,
-    post_info: &AccountInfo,
+    post_info: PostInfo,
+    post_info_acc: &AccountInfo,
     accounts: &[AccountInfo],
 ) -> ProgramResult {
-    let (derived_info_key, post_info_seeds) = post_info!(program_id, post_id);
+    let (derived_info_key, post_info_seeds) = post_info!(program_id, post_info.post_id);
 
-    if *post_info.key != derived_info_key {
+    if *post_info_acc.key != derived_info_key {
         return Err(ProgramError::InvalidArgument);
     }
-
-    let info = PostInfo {
-        state: *state_acc,
-        post_id,
-        created_at,
-        repost_price: Some(repost_price),
-    };
 
     let rent = Rent::get()?;
     let lamports = rent.minimum_balance(PostInfo::SIZE);
@@ -968,9 +979,9 @@ fn save_post_info(
         PostInfo::SIZE as u64,
         program_id,
     );
-    invoke_signed(&create, accounts, &[post_info_seeds])?;
 
-    initialize_entity(info, post_info)?;
+    invoke_signed(&create, accounts, &[post_info_seeds])?;
+    initialize_entity(post_info, post_info_acc)?;
 
     Ok(())
 }
@@ -1026,7 +1037,7 @@ fn mint_nft(
 fn process_repost(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    _args: RepostInstruction,
+    _args: RepostArgs,
 ) -> Result<(), ProgramError> {
     let account_info_iter = &mut accounts.iter();
     let (authority, authority_seeds) = authority!(program_id);
@@ -1126,6 +1137,8 @@ fn process_repost(
         &[authority_seeds],
     )?;
 
+    msg!("after mint copy");
+
     if *master_edition.owner != mpl_token_metadata::ID {
         return Err(ProgramError::IllegalOwner);
     }
@@ -1141,6 +1154,8 @@ fn process_repost(
         mpl_token_metadata::state::MasterEditionV2::from_account_info(master_edition)?;
 
     let edition = edition_data.supply.checked_add(1).ok_or(Error::Overflow)?;
+
+    msg!("before copy");
 
     let copy_from_master =
         mpl_token_metadata::instruction::mint_new_edition_from_master_edition_via_token(
@@ -1160,6 +1175,8 @@ fn process_repost(
         );
 
     invoke_signed(&copy_from_master, accounts, &[authority_seeds])?;
+
+    msg!("after copy");
 
     // set as already sold
     let update_secondary = mpl_token_metadata::instruction::update_metadata_accounts_v2(
@@ -1190,16 +1207,19 @@ fn process_repost(
         post_id: post_info.post_id,
         reposted_at: clock.unix_timestamp,
         receive_amount: amount,
+        payer: *user.key,
     };
 
-    save_repost_record(
-        program_id,
-        user.key,
-        repost,
-        repost_record,
-        repost_mint_key,
-        accounts,
-    )?;
+    if *user.key != state.owner {
+        save_repost_record(
+            program_id,
+            user.key,
+            repost,
+            repost_record,
+            repost_mint_key,
+            accounts,
+        )?;
+    }
 
     if user_wallet.data_is_empty() {
         // also create user a atoken wallet for later distribution
@@ -1276,18 +1296,34 @@ fn process_redeem_repost(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
 ) -> Result<(), ProgramError> {
-    let account_info_iter = &mut accounts.iter();
+    let account_info_iter = &mut accounts.iter().peekable();
 
     let (state, state_acc) = next_entity::<_, ContractState>(account_info_iter, program_id)?; // 1
 
+    {
+        // migration
+        let record_acc = account_info_iter
+            .peek()
+            .ok_or(ProgramError::NotEnoughAccountKeys)?;
+
+        let mut data = record_acc.try_borrow_mut_data()?;
+        if data.len() == 145 && data[0] == RepostRecord::MAGIC {
+            // old size
+            record_acc.realloc(RepostRecord::SIZE, false)?;
+
+            data[144..].fill(0);
+        }
+    }
     let (record, record_acc) = next_entity::<_, RepostRecord>(account_info_iter, program_id)?; // 2
 
     let (vault_addr, _) = contract_vault!(program_id, state.token);
     let _vault_wallet = next_expected_token_wallet(account_info_iter, &vault_addr)?; // 3
 
-    let user = next_expected_account(account_info_iter, &record.user)?; // 4
+    let _user = next_expected_account(account_info_iter, &record.user)?; // 4
     let (user_wallet_addr, _user_wallet) =
         next_atoken_wallet(account_info_iter, &record.user, &record.token)?; // 5
+
+    let return_payer = next_expected_account(account_info_iter, &record.payer)?; // 6
 
     let (authority, authority_seeds) = authority!(program_id);
     next_expected_account(account_info_iter, &authority)?; // 6
@@ -1322,9 +1358,9 @@ fn process_redeem_repost(
     drop(record);
 
     // return lamports to the user
-    let mut user_lamports = user.try_borrow_mut_lamports()?;
+    let mut payer_lamports = return_payer.try_borrow_mut_lamports()?;
 
-    erase_repost_record(record_acc, &mut user_lamports)?;
+    erase_repost_record(record_acc, &mut payer_lamports)?;
 
     Ok(())
 }
@@ -1540,9 +1576,238 @@ fn process_claim_round_vesting(
     Ok(())
 }
 
+mod tree {
+    use anchor_lang::declare_id;
+
+    declare_id!("tree9kmh23Qwa9K8sZ9rQtYshSwKA85CTEvw5bvTrau");
+}
+
+mod spl_ac {
+    use anchor_lang::declare_id;
+
+    declare_id!("cmtDvXumGCrqC1Age74AVPhSRVXJMd8PJS91L8KbNCK");
+}
+
+mod spl_noop {
+    use anchor_lang::declare_id;
+
+    declare_id!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
+}
+
+fn process_initialize_tree(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+) -> Result<(), ProgramError> {
+    let account_info_iter = &mut accounts.iter();
+
+    let (authority, authority_seeds) = authority!(program_id);
+    next_expected_account(account_info_iter, &authority)?;
+
+    let tree = next_expected_account(account_info_iter, &tree::ID)?;
+    msg!("{:?}", tree);
+    assert_eq!(tree.data_len(), 1561592);
+
+    let tree_authority = next_account_info(account_info_iter)?;
+    let payer = next_account_info(account_info_iter)?;
+
+    let data = mpl_bubblegum::instruction::CreateTree {
+        max_depth: 30,
+        max_buffer_size: 512,
+        public: Some(false),
+    }
+    .data();
+
+    let ix = solana_program::instruction::Instruction {
+        program_id: mpl_bubblegum::ID,
+        accounts: vec![
+            AccountMeta::new(*tree_authority.key, false),
+            AccountMeta::new(*tree.key, false),
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new_readonly(authority, true),
+            AccountMeta::new_readonly(spl_noop::ID, false),
+            AccountMeta::new_readonly(spl_ac::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    };
+
+    invoke_signed(&ix, accounts, &[authority_seeds])?;
+
+    Ok(())
+}
+
+fn process_repost_compressed(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+) -> Result<(), ProgramError> {
+    let account_info_iter = &mut accounts.iter();
+
+    let (state, state_acc) = next_entity::<_, ContractState>(account_info_iter, program_id)?;
+    let (post_info, _post_info_acc) = next_entity::<_, PostInfo>(account_info_iter, program_id)?;
+    let user = next_account_info(account_info_iter)?;
+    let user_wallet = next_account_info(account_info_iter)?;
+    let payer = next_account_info(account_info_iter)?;
+    let repost_mint = next_account_info(account_info_iter)?;
+    let repost_record = next_account_info(account_info_iter)?;
+    let (authority, authority_seeds) = authority!(program_id);
+    next_expected_account(account_info_iter, &authority)?;
+
+    let tree_authority = next_account_info(account_info_iter)?;
+    let tree = next_expected_account(account_info_iter, &tree::ID)?;
+
+    let (collection_mint, _) = collection_mint!(program_id, &state.token);
+    next_expected_account(account_info_iter, &collection_mint)?;
+
+    let (collection_metadata, _) = mpl_token_metadata::pda::find_metadata_account(&collection_mint);
+    let collection_metadata_acc = next_expected_account(account_info_iter, &collection_metadata)?;
+
+    let (collection_edition, _) =
+        mpl_token_metadata::pda::find_master_edition_account(&collection_mint);
+    next_expected_account(account_info_iter, &collection_edition)?;
+
+    // check this is the same post info
+    if post_info.state != *state_acc.key {
+        msg!("post belongs to a different state");
+        return Err(ProgramError::InvalidArgument);
+    }
+
+    let clock = Clock::get()?;
+
+    if !post_info.can_repost(clock.unix_timestamp) {
+        msg!("repost window expired");
+        return Error::RepostWindowExpired.into();
+    }
+
+    // record repost
+    let repost = RepostRecord {
+        state: *state_acc.key,
+        token: state.token,
+        user: *user.key,
+        post_id: post_info.post_id,
+        reposted_at: clock.unix_timestamp,
+        receive_amount: FREE_REPOST_RECEIVE_AMOUNT,
+        payer: *payer.key,
+    };
+
+    if *user.key != state.owner {
+        save_repost_record(
+            program_id,
+            payer.key,
+            repost,
+            repost_record,
+            repost_mint.key,
+            accounts,
+        )?;
+    }
+
+    if user_wallet.data_is_empty() {
+        // also create user a atoken wallet for later distribution
+        let create_atoken =
+            spl_associated_token_account::instruction::create_associated_token_account(
+                payer.key,
+                user.key,
+                &state.token,
+                &spl_token::ID,
+            );
+
+        invoke(&create_atoken, accounts)?;
+    }
+
+    let creators = vec![
+        metaplex_adapter::Creator {
+            address: post_info.royalty_address,
+            share: 100, // receives 100% of royalties
+            verified: false,
+        },
+        metaplex_adapter::Creator {
+            // honoroble mention
+            address: state.owner,
+            share: 0,
+            verified: false,
+        },
+        metaplex_adapter::Creator {
+            // for some reason update authority is also required
+            address: authority,
+            share: 0,
+            verified: true,
+        },
+    ];
+
+    let data = mpl_bubblegum::instruction::MintToCollectionV1 {
+        metadata_args: mpl_bubblegum::state::metaplex_adapter::MetadataArgs {
+            name: post_info.name.clone(),
+            symbol: post_info.symbol.clone(),
+            uri: post_info.uri.clone(),
+            seller_fee_basis_points: POST_ROYALTY_COMMISSION_BSP,
+            primary_sale_happened: true,
+            is_mutable: true,
+            edition_nonce: None,
+            token_standard: None,
+            collection: Some(Collection {
+                verified: false,
+                key: collection_mint,
+            }),
+            uses: None,
+            token_program_version:
+                mpl_bubblegum::state::metaplex_adapter::TokenProgramVersion::Original,
+            creators,
+        },
+    }
+    .data();
+
+    let ix = solana_program::instruction::Instruction {
+        program_id: mpl_bubblegum::ID,
+        accounts: vec![
+            AccountMeta::new(*tree_authority.key, false),
+            AccountMeta::new_readonly(*user.key, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new(*tree.key, false),
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new_readonly(authority, true),
+            AccountMeta::new_readonly(authority, true),
+            AccountMeta::new_readonly(mpl_bubblegum::ID, false),
+            AccountMeta::new_readonly(collection_mint, false),
+            AccountMeta::new(collection_metadata, false),
+            AccountMeta::new_readonly(collection_edition, false),
+            AccountMeta::new_readonly(BUBBLEGUM_SIGNER, false),
+            AccountMeta::new_readonly(spl_noop::ID, false),
+            AccountMeta::new_readonly(spl_ac::ID, false),
+            AccountMeta::new_readonly(mpl_token_metadata::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    };
+
+    let meta = mpl_token_metadata::state::Metadata::safe_deserialize(
+        &collection_metadata_acc.try_borrow_data()?,
+    )?;
+
+    if meta.collection_details.is_none() {
+        // old collections do not have size, which is required for compression
+        let ss = mpl_token_metadata::instruction::set_collection_size(
+            mpl_token_metadata::ID,
+            collection_metadata,
+            authority,
+            collection_mint,
+            None,
+            0, // I hope we don't care about properly tracking this
+        );
+
+        invoke_signed(&ss, accounts, &[authority_seeds])?;
+    }
+
+    invoke_signed(&ix, accounts, &[authority_seeds])?;
+
+    Ok(())
+}
+
 // lord forgive me for this
 fn try_fix_state(accounts: &[AccountInfo]) {
     let mut state_data = accounts[0].try_borrow_mut_data().unwrap();
+
+    if state_data.get(0) != Some(&ContractState::MAGIC) {
+        return;
+    }
 
     let drop_option_offset = 210;
     let mut current_round_offset = 211;

@@ -32,3 +32,5 @@ pub const VESTING_PART_LENGTH: UnixTimestamp = 2629800; // seconds in a month
 
 pub const DEFAULT_REPORT_PRICE_LAMPORTS: u64 = 10000000; // 0.01 SOL
 pub const POST_ROYALTY_COMMISSION_BSP: u16 = 1000; // 10%
+
+pub const FREE_REPOST_RECEIVE_AMOUNT: u64 = 100;

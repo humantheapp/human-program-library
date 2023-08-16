@@ -362,6 +362,11 @@ pub struct PostInfo {
     pub post_id: [u8; 32],
     pub created_at: UnixTimestamp,
     pub repost_price: Option<u64>,
+    pub royalty_address: Pubkey,
+    pub payer: Pubkey, // address that paid for this PostInfo
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
 }
 
 impl PostInfo {
@@ -374,7 +379,7 @@ impl PostInfo {
 }
 
 impl Entity for PostInfo {
-    const SIZE: usize = 128;
+    const SIZE: usize = 350;
     const MAGIC: u8 = 0x44;
 }
 
@@ -387,6 +392,7 @@ pub struct RepostRecord {
     pub post_id: [u8; 32],
     pub reposted_at: UnixTimestamp,
     pub receive_amount: u64,
+    pub payer: Pubkey,
 }
 
 impl RepostRecord {
@@ -407,7 +413,7 @@ impl RepostRecord {
 }
 
 impl Entity for RepostRecord {
-    const SIZE: usize = 145;
+    const SIZE: usize = 177;
     const MAGIC: u8 = 0x40;
 }
 
